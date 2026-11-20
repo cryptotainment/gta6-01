@@ -1,9 +1,12 @@
-// A small seeded random number generator (mulberry32): the same seed replays the
-// same city, the same traffic and the same screenshot, every time.
+// Seeded RNG for Solmar. Every random choice in the world, traffic and
+// missions goes through one of these, so the same seed replays the same city.
+// mulberry32 is small, fast and deterministic across engines — the whole game
+// is reproducible from a single integer.
 
-export function createRandom(seed) {
-  let a = seed | 0;
-  return function random() {
+export function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0;
     a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
@@ -11,12 +14,22 @@ export function createRandom(seed) {
   };
 }
 
-// Pick one entry from an array with the seeded stream.
-export function pick(rng, list) {
-  return list[Math.floor(rng() * list.length)];
+// Float in [a, b).
+export function rngRange(rng, a, b) {
+  return a + rng() * (b - a);
 }
 
-// A number in [min, max) from the seeded stream.
-export function range(rng, min, max) {
-  return min + rng() * (max - min);
+// Integer in [a, b] inclusive.
+export function rngInt(rng, a, b) {
+  return a + Math.floor(rng() * (b - a + 1));
+}
+
+// One element of arr, uniformly.
+export function rngPick(rng, arr) {
+  return arr[Math.floor(rng() * arr.length)];
+}
+
+// A stable 50/50.
+export function rngBool(rng) {
+  return rng() < 0.5;
 }

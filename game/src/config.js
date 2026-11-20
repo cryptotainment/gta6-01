@@ -1,171 +1,145 @@
-// SOLMAR — Vice Coast. Every tuning number, colour and story beat in one place.
-// The world is a fixed 4800x3600 city; the renderer scales the camera to the window,
-// so no rule below depends on the screen size.
+// Solmar — Vice Coast: all tuning, districts, landmarks and mission data.
+// One place for every number the rest of the game reads, so balancing the game
+// never means hunting through the drawing or physics code.
 
-export const STEP = 1 / 60; // fixed simulation step, seconds
+export const WORLD_W = 4800;
+export const WORLD_H = 3600;
+export const SEA_Y = 3300; // everything below this line is water (the south coast)
+export const ROAD_W = 90;
 
-export const WORLD = { w: 4800, h: 3600 };
-export const ROAD_W = 110;
-export const ROADS_X = [400, 1200, 2000, 2800, 3600, 4400];
-export const ROADS_Y = [400, 1200, 2000, 2800];
-export const SEA_WEST = 120; // x < 120 is the sea along the beach
-export const SEA_SOUTH = 3440; // y > 3440 is the marina water
+// Avenues run north-south, streets east-west. The grid is the city: every
+// address in the game is an avenue/street crossing or a block between them.
+export const AVENUES = [600, 1200, 1800, 2400, 3000, 3600, 4200];
+export const STREETS = [450, 900, 1350, 1800, 2250, 2700, 3150];
 
-// Districts, by region. Each has a ground colour, a building palette and a name.
+// Five districts, each with its own ground and building palette. The regions
+// tile the map: Old Town west, Downtown centre-north, Industrial east,
+// Marina south-west on the water, Beach south-east on the sand.
 export const DISTRICTS = [
-  { id: 'beach', name: 'Solmar Beach', x0: 0, y0: 0, x1: 800, y1: 3600, ground: '#e8d5a0', building: ['#f2e3bb', '#e6cf96', '#d9b878'] },
-  { id: 'marina', name: 'Marina', x0: 0, y0: 3000, x1: 4800, y1: 3600, ground: '#b9d6e2', building: ['#dfeef5', '#c8dfe9', '#a9cfe0'] },
-  { id: 'downtown', name: 'Downtown', x0: 1600, y0: 800, x1: 3200, y1: 2000, ground: '#9aa0a8', building: ['#7d8590', '#6b7280', '#8b939e', '#5f6b7a'] },
-  { id: 'oldtown', name: 'Old Town', x0: 3200, y0: 0, x1: 4800, y1: 1600, ground: '#d9a06b', building: ['#c98a52', '#b97a45', '#dba878'] },
-  { id: 'industrial', name: 'The Yards', x0: 3200, y0: 2000, x1: 4800, y1: 3600, ground: '#8a7a68', building: ['#7a6a58', '#6b5d4f', '#94806c'] },
-  { id: 'suburb', name: 'Palm Heights', x0: 0, y0: 0, x1: 4800, y1: 3600, ground: '#a8b89a', building: ['#c9b18c', '#b5a37e', '#d4c4a0'] },
+  { name: 'Old Town', x0: 0, y0: 0, x1: 1800, y1: 1800, ground: '#c98d5f', building: '#b0703f', roof: '#8f5a30' },
+  { name: 'Downtown', x0: 1800, y0: 0, x1: 3600, y1: 1800, ground: '#9aa0a8', building: '#6f7a88', roof: '#525d6b' },
+  { name: 'Industrial', x0: 3600, y0: 0, x1: 4800, y1: 1800, ground: '#a87f5a', building: '#7d6248', roof: '#5f4a36' },
+  { name: 'Marina', x0: 0, y0: 1800, x1: 2400, y1: 3300, ground: '#7fa8b8', building: '#5d8296', roof: '#476374' },
+  { name: 'Beach', x0: 2400, y0: 1800, x1: 4800, y1: 3300, ground: '#e0c98f', building: '#c2a86b', roof: '#a68d55' },
 ];
 
-export const PALETTE = {
-  road: '#3a3f47',
-  roadEdge: '#2c3038',
-  lane: '#d8d3a8',
-  sidewalk: '#b9b3a4',
-  sea: '#2f7fa8',
-  seaDeep: '#256b8f',
-  sand: '#e8d5a0',
-  grass: '#7d9b6a',
-  player: '#f2c94c',
-  police: '#2f6fd0',
-  text: '#f4f1e6',
-  muted: '#c9c4b2',
-  gold: '#f2c94c',
-  red: '#e5534b',
-  green: '#58b368',
-  banner: '#14161c',
+export const COLORS = {
+  road: '#3d3d46',
+  roadLine: '#d8d8c8',
+  sidewalk: '#b9b9ae',
+  sea: '#2e6f9e',
+  seaDeep: '#245a82',
+  sand: '#e0c98f',
+  dock: '#8a6b45',
+  boat: '#f2f2ea',
+  tree: '#3f7a3a',
+  treeDark: '#2f5c2c',
+  lamp: '#e8e4d0',
+  player: '#e33f2f',
+  playerDark: '#a82a1e',
+  ped: '#f0d0a0',
+  coin: '#f2c94c',
+  coinDark: '#c9a227',
+  marker: '#ffd94d',
+  package: '#ff9d2e',
 };
 
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
-export const SAVE_KEY = 'solmar-vice-coast.save.v1';
-
-// Car types: top speed, acceleration, handling (steer rate), colour sets.
 export const CAR_TYPES = {
-  sedan: { max: 430, accel: 380, steer: 2.5, len: 52, wid: 26, colors: ['#c94f42', '#4f7ec9', '#c9c9c9', '#5a6b52'] },
-  sport: { max: 580, accel: 520, steer: 3.1, len: 54, wid: 26, colors: ['#f2c94c', '#e5534b', '#1f9d8a'] },
-  taxi: { max: 410, accel: 360, steer: 2.5, len: 52, wid: 26, colors: ['#f2b705'] },
-  van: { max: 350, accel: 300, steer: 2.1, len: 62, wid: 28, colors: ['#8a8f98', '#b0b5bd'] },
-  police: { max: 540, accel: 500, steer: 3.0, len: 54, wid: 26, colors: ['#2f6fd0'] },
+  sedan: { maxSpeed: 330, accel: 300, brake: 520, turn: 2.6, length: 44, width: 22, colors: ['#4a6fa5', '#7a4a8f', '#5a8f5a', '#a55a4a'] },
+  sport: { maxSpeed: 470, accel: 420, brake: 620, turn: 3.1, length: 46, width: 21, colors: ['#f2c94c', '#e33f2f', '#2fb3a8'] },
+  taxi: { maxSpeed: 350, accel: 320, brake: 540, turn: 2.7, length: 44, width: 22, colors: ['#f2c94c'] },
+  police: { maxSpeed: 430, accel: 400, brake: 640, turn: 3.0, length: 46, width: 22, colors: ['#1c1e26'] },
+  truck: { maxSpeed: 250, accel: 210, brake: 420, turn: 2.0, length: 58, width: 24, colors: ['#8a6b45', '#6b7a8f'] },
 };
 
 export const PLAYER = {
-  walkSpeed: 235,
-  radius: 15,
-  hp: 100,
-  punchRange: 52,
-  punchDamage: 25,
+  walkSpeed: 175,
+  runSpeed: 240,
+  radius: 13,
+  health: 100,
+  punchRange: 34,
+  punchDamage: 12,
   pistolDamage: 34,
-  bulletSpeed: 920,
-  bulletRange: 520,
+  pistolRange: 420,
+  pistolPrice: 200,
+  ammoPrice: 50,
+  ammoPack: 30,
+  healPrice: 30,
+  repaintPrice: 50,
+  ownedCarPrice: 500,
 };
 
 export const WANTED = {
   max: 5,
-  // police cars on the street per level
-  carsPerLevel: [0, 1, 2, 3, 4, 4],
-  // seconds with no police in sight before the level drops by one
-  coolDown: 7,
-  sightRange: 620,
-  // seconds a slow police car must stay touching an on-foot player to arrest
-  arrestTime: 1.6,
+  steal: 1,
+  hitPed: 1,
+  shoot: 1,
+  speedPastPolice: 1,
+  loseSightSeconds: 8,
+  decaySeconds: 4,
+  arrestHoldSeconds: 2,
 };
 
-export const PRICES = {
-  pistol: 200,
-  ammo: 50,
-  ammoRounds: 24,
-  medkit: 60,
-  sportscar: 800,
-  repaint: 150,
-  taxiMin: 40,
-  taxiMax: 120,
-  coin: 25,
-  stunt: 50,
-  bustFine: 200,
-  deathFine: 100,
-};
-
-// Fixed landmarks, by name. Missions, shops and garages all point here.
+// Named places the missions and the HUD point at. All on or beside a road.
 export const LANDMARKS = {
-  taxiStand: { x: 2000, y: 2000, label: 'Taxi Stand' },
-  beachHotel: { x: 560, y: 1800, label: 'Palmera Hotel' },
-  sportCar: { x: 3600, y: 800, label: 'Sports Car' },
-  garage: { x: 1200, y: 2800, label: 'TINT & PAINT' },
-  bank: { x: 2400, y: 1200, label: 'Solmar Bank' },
-  marinaDrop: { x: 800, y: 3200, label: 'Marina Dock' },
-  gunShop: { x: 2800, y: 2000, label: 'Ironworks Guns' },
-  clinic: { x: 2000, y: 1200, label: 'St. Mara Clinic' },
-  carShop: { x: 3600, y: 2400, label: 'Vice Motors' },
-  policeStation: { x: 2800, y: 400, label: 'Solmar PD' },
-  rampBeach: { x: 400, y: 2800, label: 'Beach Ramp' },
-  rampDowntown: { x: 2000, y: 400, label: 'Downtown Ramp' },
-  informantA: { x: 2800, y: 400, label: 'Package 1' },
-  informantB: { x: 3600, y: 800, label: 'Package 2' },
-  informantC: { x: 3200, y: 1200, label: 'Package 3' },
-  beachCp1: { x: 400, y: 800, label: 'Checkpoint 1' },
-  beachCp2: { x: 400, y: 1800, label: 'Checkpoint 2' },
-  beachCp3: { x: 400, y: 2800, label: 'Checkpoint 3' },
-  spawn: { x: 2000, y: 2060, label: 'Riko Vale' },
+  garage: { x: 900, y: 2700, name: 'TINT & PAINT' },
+  gunShop: { x: 2100, y: 1200, name: 'Gun Shop' },
+  clinic: { x: 2700, y: 2700, name: 'Clinic' },
+  bank: { x: 2400, y: 900, name: 'Solmar Bank' },
+  marina: { x: 800, y: 3350, name: 'Marina' },
+  clientPickup: { x: 600, y: 600, name: 'Client' },
+  fareDropoff: { x: 4200, y: 2700, name: 'Dropoff' },
+  sportsCar: { x: 3600, y: 1350, name: 'Sports car' },
+  informantA: { x: 600, y: 900, name: 'Package A' },
+  informantB: { x: 1200, y: 1350, name: 'Package B' },
+  informantC: { x: 900, y: 1800, name: 'Package C' },
+  beachStart: { x: 4200, y: 3150, name: 'Beach start' },
+  beachEnd: { x: 600, y: 3150, name: 'Beach end' },
+  getawayStart: { x: 1800, y: 1350, name: 'Getaway start' },
 };
 
-// The six chained missions. Each step is one objective:
-// goto (reach a marker), collect (reach each point in `points`), timed
-// (reach every point before `time` runs out), escape (lose the wanted level),
-// repaint (drive into the garage while wanted).
 export const MISSIONS = [
   {
-    id: 1, name: 'First Fare', reward: 150,
-    intro: 'Riko Vale, driver for hire. A client waits at the taxi stand — get them to the Palmera Hotel on the beach, and mind the traffic.',
-    steps: [
-      { type: 'goto', x: 2000, y: 2000, r: 70, label: 'Pick up the client at the Taxi Stand' },
-      { type: 'goto', x: 560, y: 1800, r: 80, label: 'Drive the client to the Palmera Hotel' },
-    ],
+    id: 1, name: 'First Fare', reward: 120,
+    intro: 'A client needs a ride across town. Pick them up and drive them to the beach.',
+    type: 'driveTo', target: 'fareDropoff', start: 'clientPickup',
   },
   {
-    id: 2, name: 'Hot Wheels', reward: 300,
-    intro: 'A collector in Old Town wants a yellow sports car — the one parked by the plaza. Take it. The owner will not be pleased.',
-    steps: [
-      { type: 'goto', x: 3600, y: 800, r: 80, label: 'Find the yellow sports car in Old Town' },
-      { type: 'goto', x: 1200, y: 2800, r: 90, label: 'Deliver the car to TINT & PAINT' },
-    ],
+    id: 2, name: 'Hot Wheels', reward: 250,
+    intro: 'Steal the yellow sports car parked in the Industrial district and bring it to the garage.',
+    type: 'deliverCar', target: 'garage', carAt: 'sportsCar',
   },
   {
-    id: 3, name: 'Beach Run', reward: 400,
-    intro: 'A courier run down the coast road. Three checkpoints, seventy-five seconds, and the beach traffic is not slowing down for you.',
-    steps: [
-      { type: 'timed', time: 75, points: [{ x: 400, y: 800 }, { x: 400, y: 1800 }, { x: 400, y: 2800 }], label: 'Hit all 3 beach checkpoints in time' },
-    ],
+    id: 3, name: 'Beach Run', reward: 300,
+    intro: 'Timed delivery along the coast road. Get from the east end to the west end before the clock runs out.',
+    type: 'timed', target: 'beachEnd', start: 'beachStart', timeLimit: 75,
   },
   {
     id: 4, name: 'The Informant', reward: 350,
-    intro: 'Three packages stashed around Old Town, and the PD is patrolling. On foot, quiet, and do not let them see you pick anything up.',
-    steps: [
-      { type: 'collect', points: [{ x: 2800, y: 400 }, { x: 3600, y: 800 }, { x: 3200, y: 1200 }], label: 'Collect the 3 packages on foot' },
-    ],
+    intro: 'On foot. Collect three packages around Old Town and stay out of the patrols.',
+    type: 'collect', targets: ['informantA', 'informantB', 'informantC'],
   },
   {
-    id: 5, name: 'Getaway', reward: 500,
-    intro: 'The job went loud. Three stars and every unit in the city is coming. Lose them, then get the car repainted at TINT & PAINT.',
-    steps: [
-      { type: 'escape', label: 'Lose the police (wanted level to zero)' },
-      { type: 'repaint', x: 1200, y: 2800, r: 90, label: 'Repaint the car at TINT & PAINT' },
-    ],
+    id: 5, name: 'Getaway', reward: 450,
+    intro: 'Three stars on you. Lose the cops, then repaint the car at TINT & PAINT.',
+    type: 'escape', target: 'garage', startWanted: 3,
   },
   {
     id: 6, name: 'The Solmar Job', reward: 1000,
-    intro: 'The big one. Lift the case from Solmar Bank and run it to the marina dock. Four stars the moment you touch it. Make it count.',
-    steps: [
-      { type: 'goto', x: 2400, y: 1200, r: 80, label: 'Pick up the case at Solmar Bank' },
-      { type: 'goto', x: 800, y: 3200, r: 90, label: 'Deliver the case to the Marina Dock' },
-    ],
+    intro: 'Pick up the bank job at Solmar Bank, then deliver it to the marina. The whole city will be after you.',
+    type: 'deliverCar', target: 'marina', start: 'bank', startWanted: 2,
   },
 ];
 
 export const COIN_COUNT = 20;
-export const TRAFFIC_COUNT = 26;
-export const PED_COUNT = 34;
-export const TAXI_FARE_TIME = 60;
+export const COIN_VALUE = 25;
+export const STUNT_VALUE = 20;
+export const FARE_MIN = 30;
+export const FARE_MAX = 80;
+
+// Ramps for stunt jumps: a low wedge on a straight road.
+export const RAMPS = [
+  { x: 2400, y: 3150, angle: 0 },
+  { x: 1200, y: 2250, angle: Math.PI / 2 },
+  { x: 3600, y: 900, angle: Math.PI },
+];

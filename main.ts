@@ -1,11 +1,11 @@
-// SOLMAR — Vice Coast: a 2D top-down open-world crime game written for gta6-01
-// (Node 22, standard library only). The game is this directory's game/ folder,
-// plain static files a desktop browser loads offline (game/index.html and its ES
-// modules, no library and no network request), and the program hands it in: it
-// copies game/ and screenshots/ from beside this file to /output and writes
-// /output/dossier.json, the summary the judge reads, with the vendored make.fun
-// library. Riko Vale drives, steals cars, outruns the Solmar PD across five
-// districts, and runs six chained missions — all drawn in code, all seeded.
+// Solmar — Vice Coast: the entrypoint for make.fun's "Make GTA 6" bounty.
+// The game is the plain static files under game/ (a 2D top-down open-world
+// crime game in canvas, ES modules, no library, no network), and this program
+// hands it in: it copies game/ and screenshots/ from beside this file to
+// /output and writes /output/dossier.json, the summary the judge reads, with
+// the vendored make.fun library. The four screenshots are real renders of the
+// game at a fixed seed (game/src/shots.js stages them). Node 22, standard
+// library only.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:

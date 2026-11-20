@@ -1,49 +1,81 @@
-// SOLMAR — Vice Coast. Keyboard and mouse: the key set, the mouse position on
-// the canvas, click edges and key edges (pressed() is true only on the frame
-// the key goes down, so E and Enter never fire twice from one press).
+// Keyboard and mouse: one shared input object the whole game reads. Keys
+// are tracked by code (so WASD and arrows both work), the mouse position is
+// kept in canvas pixels, and a click sets `shoot` for one tick. Nothing here
+// knows about the game — main.js wires the two together.
 
-export function createInput(canvas) {
-  const input = {
-    keys: new Set(),
-    pressedKeys: new Set(),
+export function makeInput() {
+  return {
+    up: false,
+    down: false,
+    left: false,
+    right: false,
+    run: false,
+    handbrake: false,
+    shoot: false,
     mouseX: 0,
     mouseY: 0,
-    mouseDown: false,
-    mouseClicked: false,
-    pressed(code) {
-      return this.pressedKeys.has(code);
-    },
-    endFrame() {
-      this.pressedKeys.clear();
-      this.mouseClicked = false;
-    },
+    // Edge-triggered keys (true only on the tick they were pressed).
+    pressed: {},
+    keys: {},
   };
-  const GAME_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'KeyM', 'KeyR', 'KeyQ', 'Enter', 'Escape'];
-  window.addEventListener('keydown', (event) => {
-    if (GAME_KEYS.includes(event.code)) event.preventDefault();
-    if (!event.repeat) input.pressedKeys.add(event.code);
-    input.keys.add(event.code);
+}
+
+const KEYMAP = {
+  KeyW: 'up',
+  ArrowUp: 'up',
+  KeyS: 'down',
+  ArrowDown: 'down',
+  KeyA: 'left',
+  ArrowLeft: 'left',
+  KeyD: 'right',
+  ArrowRight: 'right',
+  ShiftLeft: 'run',
+  ShiftRight: 'run',
+  Space: 'handbrake',
+};
+
+export function bindInput(input, canvas) {
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') e.preventDefault();
+    const name = KEYMAP[e.code];
+    if (name) {
+      if (!input.keys[e.code]) input.pressed[name] = true;
+      input[name] = true;
+      input.keys[e.code] = true;
+    }
+    // Raw codes the game reads directly (Enter, Escape, E, R, Q, M).
+    if (!input.keys[e.code]) input.pressed[e.code] = true;
+    input.keys[e.code] = true;
   });
-  window.addEventListener('keyup', (event) => {
-    input.keys.delete(event.code);
-  });
-  window.addEventListener('blur', () => {
-    input.keys.clear();
-  });
-  canvas.addEventListener('mousemove', (event) => {
-    const rect = canvas.getBoundingClientRect();
-    input.mouseX = event.clientX - rect.left;
-    input.mouseY = event.clientY - rect.top;
-  });
-  canvas.addEventListener('mousedown', (event) => {
-    if (event.button === 0) {
-      input.mouseDown = true;
-      input.mouseClicked = true;
+  window.addEventListener('keyup', (e) => {
+    const name = KEYMAP[e.code];
+    if (name) {
+      input[name] = false;
+      input.keys[e.code] = false;
+    } else {
+      input.keys[e.code] = false;
     }
   });
-  window.addEventListener('mouseup', (event) => {
-    if (event.button === 0) input.mouseDown = false;
+  canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    input.mouseX = e.clientX - rect.left;
+    input.mouseY = e.clientY - rect.top;
   });
-  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
-  return input;
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 0) input.shoot = true;
+    const rect = canvas.getBoundingClientRect();
+    input.mouseX = e.clientX - rect.left;
+    input.mouseY = e.clientY - rect.top;
+  });
+  canvas.addEventListener('mouseup', () => {
+    input.shoot = false;
+  });
+  // Keep the canvas focused so keys always arrive.
+  canvas.setAttribute('tabindex', '0');
+}
+
+// Called at the end of each tick: edge triggers live for one tick only.
+export function endTickInput(input) {
+  input.pressed = {};
+  // `shoot` is held while the mouse button is down; it is cleared on mouseup.
 }

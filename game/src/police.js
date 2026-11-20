@@ -1,188 +1,188 @@
-// SOLMAR — Vice Coast. The wanted level and the Solmar PD: police cars that spawn
-// at the road edge and chase, foot officers at higher levels, arrest when they
-// catch Riko on foot, and the cool-down that lets a careful driver lose them —
-// plus the TINT & PAINT garage that paints the heat away.
+// Wanted level and police: crimes raise the stars, police cars and foot
+// officers respond, chase and ram, and arrest on contact when the player is
+// slow. Lose the heat by breaking line of sight and distance, or by
+// repainting the car at TINT & PAINT. The wanted level is the game's pressure
+// valve: it turns a quiet drive into a chase.
 
-import { WANTED, PLAYER, ROADS_X, ROADS_Y } from './config.js';
-import { makeCar, paintCar, driveCar } from './vehicles.js';
-import { nearestRoad, isOnRoad } from './world.js';
-import { pick } from './random.js';
+import { WANTED, LANDMARKS } from './config.js';
+import { makeCar, collideBuildings } from './vehicles.js';
+import { nearestRoadPoint } from './world.js';
 
-// Raise the wanted level, never above the cap. A short grace stops one incident
-// (one stolen car, one crash) from stacking the same crime twice.
-export function addWanted(game, levels, reason) {
-  const now = game.time;
-  if (game.wantedGrace > now) return;
-  game.wantedGrace = now + 1.2;
+export function addWanted(game, n) {
+  if (n <= 0) return;
   const before = game.wanted;
-  game.wanted = Math.min(WANTED.max, game.wanted + levels);
+  game.wanted = Math.min(WANTED.max, game.wanted + n);
   if (game.wanted > before) {
-    game.wantedFlash = 1.2;
-    game.audio.sirenBurst();
-    if (game.wanted >= 3 && before < 3) {
-      game.banner = { text: `${game.wanted} STARS — PD ON THE WAY`, sub: reason, t: 2.2 };
-    }
+    game.noSightT = 0;
+    game.audio.siren();
   }
 }
 
-function spawnPointNear(game, dist) {
-  const p = game.player;
-  const road = pick(game.rng, ROADS_X);
-  const roadY = pick(game.rng, ROADS_Y);
-  const vertical = game.rng() < 0.5;
-  if (vertical) {
-    const dir = p.y < roadY ? -1 : 1;
-    return { x: road, y: p.y + dir * dist, vertical: true };
-  }
-  const dir = p.x < road ? -1 : 1;
-  return { x: p.x + dir * dist, y: roadY, vertical: false };
+export function setWanted(game, n) {
+  game.wanted = Math.max(0, Math.min(WANTED.max, n));
+  if (n === 0) game.noSightT = 0;
 }
 
-function spawnPoliceCar(game) {
-  const spot = spawnPointNear(game, 700);
-  const car = makeCar('police', spot.x, spot.y, 0, 'police');
-  paintCar(car, '#2f6fd0');
-  car.vertical = spot.vertical;
-  game.policeCars.push(car);
-  game.audio.sirenBurst();
+// How many police cars the current wanted level fields.
+export function policeTarget(game) {
+  return game.wanted === 0 ? 0 : Math.min(game.wanted + 1, 6);
 }
 
-function spawnFootCop(game) {
+// Spawn a police car on a road near the player.
+export function spawnPoliceCar(game) {
   const p = game.player;
-  const angle = game.rng() * Math.PI * 2;
-  game.footCops.push({
-    x: p.x + Math.cos(angle) * 420,
-    y: p.y + Math.sin(angle) * 420,
-    hp: 50,
-    shootCd: 1 + game.rng(),
-    grab: 0,
-  });
+  const spot = nearestRoadPoint(p.x + (game.rng() < 0.5 ? -1 : 1) * 500, p.y + (game.rng() < 0.5 ? -1 : 1) * 400);
+  const car = makeCar(game.rng, 'police', spot.x, spot.y, 0, '#1c1e26');
+  car.isPolice = true;
+  car.siren = true;
+  car.speed = 200;
+  game.cars.push(car);
+  game.police.push(car);
+  return car;
 }
 
 export function updatePolice(game, dt) {
   const p = game.player;
-  const want = game.wanted;
-  // Keep the street presence matched to the wanted level.
-  const wantCars = WANTED.carsPerLevel[want];
-  while (game.policeCars.length < wantCars) spawnPoliceCar(game);
-  while (game.policeCars.length > wantCars) game.policeCars.pop();
-  const wantCops = want >= 2 ? Math.min(3, want - 1) : 0;
-  while (game.footCops.length < wantCops) spawnFootCop(game);
-  while (game.footCops.length > wantCops) game.footCops.pop();
+  // Field the right number of police cars.
+  const target = policeTarget(game);
+  // Remove surplus police cars (they drive off).
+  while (game.police.length > target) {
+    const car = game.police.pop();
+    car.isPolice = false;
+    car.siren = false;
+    car.isTraffic = true;
+    car.autopilot = { waypoints: [{ x: 2400, y: 1600 }], i: 0 };
+  }
+  while (game.police.length < target) {
+    spawnPoliceCar(game);
+  }
 
-  // Police cars: steer at the player, ram, and keep up at higher levels.
-  for (const car of game.policeCars) {
-    car.ramCd = Math.max(0, (car.ramCd || 0) - dt);
-    // Do not pile onto one another: push the aim point away from nearby units.
-    let aimX = p.x;
-    let aimY = p.y;
-    for (const other of game.policeCars) {
-      if (other === car) continue;
-      const ox = car.x - other.x;
-      const oy = car.y - other.y;
-      const od = Math.hypot(ox, oy);
-      if (od > 0.01 && od < 110) {
-        aimX += (ox / od) * (110 - od) * 0.9;
-        aimY += (oy / od) * (110 - od) * 0.9;
+  // Line of sight: a police car sees the player if it is close and no
+  // building stands between them.
+  let seen = false;
+  for (const car of game.police) {
+    const d = Math.hypot(car.x - p.x, car.y - p.y);
+    if (d < 700 && hasLineOfSight(game, car.x, car.y, p.x, p.y)) seen = true;
+    // Pursuit: steer at the player, faster than traffic, and ram.
+    const targetAngle = Math.atan2(p.y - car.y, p.x - car.x);
+    let diff = targetAngle - car.angle;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    const steer = Math.max(-1, Math.min(1, diff * 2.4));
+    const throttle = d > 60 ? 1 : 0.4;
+    // Drive the police car directly (not via autopilot).
+    drivePoliceCar(game, car, throttle, steer, dt);
+    collideBuildings(game, car);
+    // Ram: touching the player's car slows it and hurts the player a little.
+    if (!p.onFoot && p.car) {
+      if (Math.hypot(car.x - p.car.x, car.y - p.car.y) < 46) {
+        p.car.speed *= 0.82;
+        if (p.invuln <= 0) {
+          p.health -= 2;
+          p.invuln = 0.5;
+          game.shake = Math.max(game.shake, 4);
+        }
       }
     }
-    const dx = aimX - car.x;
-    const dy = aimY - car.y;
-    const dist = Math.hypot(dx, dy) || 1;
-    const wantAngle = Math.atan2(dy, dx);
-    let da = wantAngle - car.angle;
-    while (da > Math.PI) da -= Math.PI * 2;
-    while (da < -Math.PI) da += Math.PI * 2;
-    const steer = Math.max(-1, Math.min(1, da * 1.6));
-    const maxChase = 380 + want * 42;
-    const throttle = dist > 90 ? 1 : 0.4;
-    const hit = driveCar(car, { throttle, steer, brake: false }, dt, game.world);
-    if (hit && Math.abs(car.speed) > 240) game.audio.thud();
-    if (car.speed > maxChase) car.speed = maxChase;
-    // Ramming the player's car damages it — one solid hit per car, then a pause,
-    // so a surrounded car is threatened, not shredded in seconds.
-    if (p.car && car.ramCd <= 0 && Math.abs(car.speed) > 200 && Math.hypot(car.x - p.car.x, car.y - p.car.y) < 56) {
-      p.car.hp -= 5;
-      car.ramCd = 1.2;
-      game.shake = Math.max(game.shake, 0.12);
-      game.audio.thud();
+    // Arrest: a police car beside a slow player on foot, held for 2 seconds.
+    if (p.onFoot && d < 52 && Math.abs(p.speed) < 30) {
+      game.arrestT = (game.arrestT || 0) + dt;
+      if (game.arrestT >= WANTED.arrestHoldSeconds) {
+        game.arrested = true;
+      }
+    } else if (p.onFoot) {
+      game.arrestT = 0;
     }
-    // A slow police car touching Riko on foot starts the arrest.
-    if (p.onFoot && Math.hypot(car.x - p.x, car.y - p.y) < 48 && Math.abs(car.speed) < 90) {
-      game.arrest += dt;
-      if (game.arrest > WANTED.arrestTime) {
-        game.screen = 'busted';
-        game.audio.busted();
+    // Arrest a stopped car: police beside it for 2 seconds.
+    if (!p.onFoot && p.car && d < 52 && Math.abs(p.car.speed) < 25) {
+      game.arrestT = (game.arrestT || 0) + dt;
+      if (game.arrestT >= WANTED.arrestHoldSeconds) {
+        game.arrested = true;
       }
     }
   }
-  if (!p.onFoot || game.policeCars.every((c) => Math.hypot(c.x - p.x, c.y - p.y) > 48 || Math.abs(c.speed) >= 90)) {
-    game.arrest = Math.max(0, game.arrest - dt * 2);
-  }
 
-  // Foot officers: run Riko down, grab him, and shoot from wanted 3 up.
-  for (const cop of game.footCops) {
-    const dx = p.x - cop.x;
-    const dy = p.y - cop.y;
-    const dist = Math.hypot(dx, dy) || 1;
-    cop.x += (dx / dist) * 190 * dt;
-    cop.y += (dy / dist) * 190 * dt;
-    if (dist < 42 && p.onFoot) {
-      game.arrest += dt * 1.4;
-      if (game.arrest > WANTED.arrestTime) {
-        game.screen = 'busted';
-        game.audio.busted();
-      }
-    }
-    if (want >= 3 && dist < 460 && dist > 60) {
-      cop.shootCd -= dt;
-      if (cop.shootCd <= 0) {
-        cop.shootCd = 1.4 + game.rng() * 0.8;
-        const aim = Math.atan2(dy, dx) + (game.rng() - 0.5) * 0.22;
-        game.bullets.push({ x: cop.x, y: cop.y, vx: Math.cos(aim) * 780, vy: Math.sin(aim) * 780, dist: 0, from: 'police', damage: 9 });
-        game.audio.gunshot();
-      }
-    }
-    if (cop.hp <= 0) {
-      cop.dead = true;
-      game.particles.push({ x: cop.x, y: cop.y, vx: 0, vy: -30, life: 0.5, max: 0.5, color: '#2f6fd0', size: 6 });
-    }
-  }
-  game.footCops = game.footCops.filter((c) => !c.dead);
-
-  // Lose the cops: with no police in sight for a while, the level drops.
-  if (want > 0) {
-    const nearest = Math.min(
-      ...game.policeCars.map((c) => Math.hypot(c.x - p.x, c.y - p.y)),
-      ...game.footCops.map((c) => Math.hypot(c.x - p.x, c.y - p.y)),
-      Infinity,
-    );
-    if (nearest > WANTED.sightRange) {
-      game.coolTimer += dt;
-      if (game.coolTimer >= WANTED.coolDown) {
-        game.coolTimer = 0;
-        game.wanted -= 1;
-        game.banner = { text: 'HEAT DROPPING', sub: `Wanted level ${game.wanted}`, t: 1.6 };
-      }
+  // Losing the cops: out of sight and far away for 8 seconds, then the
+  // wanted level ticks down one star every 4 seconds.
+  if (game.wanted > 0) {
+    if (seen) {
+      game.noSightT = 0;
     } else {
-      game.coolTimer = 0;
+      game.noSightT = (game.noSightT || 0) + dt;
+      if (game.noSightT >= WANTED.loseSightSeconds) {
+        game.decayT = (game.decayT || 0) + dt;
+        if (game.decayT >= WANTED.decaySeconds) {
+          game.decayT = 0;
+          game.wanted -= 1;
+          game.setBanner('Heat dropping', `Wanted level ${game.wanted}.`, 1.5);
+        }
+      }
     }
-  } else {
-    game.coolTimer = 0;
   }
+}
 
-  // TINT & PAINT: drive the car into the garage and the heat is painted away.
-  const g = game.world.garage;
-  if (!p.onFoot && p.car && game.wanted > 0 && Math.hypot(g.x - p.car.x, g.y - p.car.y) < g.r) {
-    if (p.cash >= 150) {
-      p.cash -= 150;
-      game.wanted = 0;
-      game.policeCars.length = 0;
-      game.footCops.length = 0;
-      paintCar(p.car, pick(game.rng, ['#1f9d8a', '#e5534b', '#4f7ec9', '#c9c9c9', '#f2c94c']));
-      game.banner = { text: 'REPAINTED', sub: 'New colour, clean slate — $150', t: 2.2 };
-      game.audio.buy();
-      game.repainted = true;
+// Drive a police car with throttle/steer, reusing the car physics.
+function drivePoliceCar(game, car, throttle, steer, dt) {
+  // Inline the same physics as driveCar, but the police car is a little
+  // grippier so it can keep up in a chase.
+  const maxFwd = car.maxSpeed;
+  if (throttle > 0) car.speed += car.accel * 1.15 * throttle * dt;
+  else if (throttle < 0) car.speed += car.brake * throttle * dt;
+  else {
+    car.speed -= Math.sign(car.speed) * 140 * dt;
+    if (Math.abs(car.speed) < 6) car.speed = 0;
+  }
+  if (car.speed > maxFwd) car.speed = maxFwd;
+  if (car.speed < -90) car.speed = -90;
+  const speedFactor = Math.min(1, Math.abs(car.speed) / 160);
+  const turnRate = car.turn * (0.4 + 0.6 * speedFactor) * Math.sign(car.speed || 1);
+  car.angle += steer * turnRate * dt;
+  car.x += Math.cos(car.angle) * car.speed * dt;
+  car.y += Math.sin(car.angle) * car.speed * dt;
+  if (car.x < 30) { car.x = 30; car.speed *= 0.5; }
+  if (car.x > 4770) { car.x = 4770; car.speed *= 0.5; }
+  if (car.y < 30) { car.y = 30; car.speed *= 0.5; }
+  if (car.y > 3270) { car.y = 3270; car.speed *= 0.5; }
+}
+
+// Line of sight between two points: false if a building blocks the segment.
+export function hasLineOfSight(game, x0, y0, x1, y1) {
+  const steps = 24;
+  for (let i = 1; i < steps; i += 1) {
+    const x = x0 + ((x1 - x0) * i) / steps;
+    const y = y0 + ((y1 - y0) * i) / steps;
+    for (const b of game.world.buildings) {
+      if (x > b.x && x < b.x + b.w && y > b.y && y < b.y + b.h) return false;
     }
   }
+  return true;
+}
+
+// Police return fire at wanted 2+ when close to an on-foot player.
+export function policeFire(game, dt) {
+  if (game.wanted < 2) return;
+  const p = game.player;
+  if (!p.onFoot) return;
+  game.fireCd = (game.fireCd || 0) - dt;
+  if (game.fireCd > 0) return;
+  for (const car of game.police) {
+    const d = Math.hypot(car.x - p.x, car.y - p.y);
+    if (d < 380 && hasLineOfSight(game, car.x, car.y, p.x, p.y)) {
+      game.fireCd = 0.9;
+      const spread = (game.rng() - 0.5) * 0.35;
+      const angle = Math.atan2(p.y - car.y, p.x - car.x) + spread;
+      game.bullets.push({
+        x: car.x, y: car.y, angle, speed: 820, life: 0.7, from: 'police',
+      });
+      game.audio.shot();
+      break;
+    }
+  }
+}
+
+// Is the player's car inside the TINT & PAINT garage zone?
+export function inGarageZone(game) {
+  const p = game.player;
+  if (p.onFoot || !p.car) return false;
+  return Math.hypot(p.car.x - LANDMARKS.garage.x, p.car.y - LANDMARKS.garage.y) < 110;
 }

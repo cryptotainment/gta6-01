@@ -1,42 +1,62 @@
-// SOLMAR — Vice Coast. Saving: missions done, cash, sun coins, the car Riko
-// owns, and the mute setting — in localStorage, so the start screen can offer
-// Continue. Nothing leaves the browser.
+// Save and continue: progress (missions done, cash, sun coins, owned car)
+// lives in localStorage under one key. Nothing else is stored, and loading a
+// save never touches the world seed — the city is always the same city.
 
-import { SAVE_KEY } from './config.js';
+const SAVE_KEY = 'solmar-save-v1';
 
-export function loadSave() {
+export function saveGame(game) {
+  try {
+    const p = game.player;
+    const data = {
+      version: 1,
+      missionsDone: p.missionsDone,
+      cash: p.cash,
+      coins: p.coins,
+      ownedCar: !!p.ownedCar,
+      weapon: p.weapon,
+      ammo: p.ammo,
+    };
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+export function loadGame() {
   try {
     const raw = window.localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
-    if (typeof data !== 'object' || data === null) return null;
+    if (!data || data.version !== 1) return null;
     return data;
-  } catch {
+  } catch (e) {
     return null;
   }
 }
 
-export function writeSave(game) {
-  try {
-    const p = game.player;
-    const data = {
-      cash: p.cash,
-      missionsDone: p.missionsDone,
-      missionIndex: game.missions.index,
-      coins: game.world.coins.filter((c) => c.taken).map((c) => c.id),
-      ownedType: p.ownedCar ? p.ownedCar.type : null,
-      weapon: p.weapon,
-      ammo: p.ammo,
-      muted: game.audio.muted,
-    };
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify(data));
-  } catch {
-    // A browser that refuses storage just plays without saving.
-  }
+export function hasSave() {
+  return loadGame() !== null;
+}
+
+export function applySave(game, data) {
+  if (!data) return;
+  const p = game.player;
+  p.missionsDone = data.missionsDone || 0;
+  p.cash = data.cash || 0;
+  p.coins = data.coins || 0;
+  p.ownedCar = !!data.ownedCar;
+  p.weapon = data.weapon || null;
+  p.ammo = data.ammo || 0;
+  game.missions.index = (data.missionsDone || 0) + 1;
+  game.missions.done = [];
+  for (let i = 1; i <= (data.missionsDone || 0); i += 1) game.missions.done.push(i);
 }
 
 export function clearSave() {
   try {
     window.localStorage.removeItem(SAVE_KEY);
-  } catch { /* ignore */ }
+  } catch (e) {
+    // Storage may be unavailable (private mode); the game still runs.
+  }
 }

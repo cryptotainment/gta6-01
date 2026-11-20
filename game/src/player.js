@@ -1,279 +1,295 @@
-// SOLMAR — Vice Coast. Riko Vale on foot: WASD movement, mouse aim, fists and the
-// pistol, entering and stealing cars, picking up coins and packages, and the
-// shops he can use when he is standing next to one.
+// Riko Vale on foot: walk and run, aim with the mouse, punch or shoot,
+// get in and out of cars (E to enter or steal), pick up sun coins and mission
+// packages, and use the shops. Everything here reads the game object and the
+// input state, and writes back to the player.
 
-import { PLAYER, PRICES, LANDMARKS } from './config.js';
-import { collideBuildings, isInWater, circleHitsRect } from './world.js';
-import { driveCar, makeCar, paintCar } from './vehicles.js';
-import { addWanted } from './police.js';
-import { scarePeds } from './traffic.js';
+import { PLAYER, LANDMARKS, COIN_VALUE } from './config.js';
+import { isBlocked } from './world.js';
+import { driveCar } from './vehicles.js';
 
-export function createPlayer() {
+export function makePlayer(x, y) {
   return {
-    x: LANDMARKS.spawn.x,
-    y: LANDMARKS.spawn.y,
-    angle: -Math.PI / 2,
-    hp: PLAYER.hp,
+    x, y, angle: -Math.PI / 2,
     onFoot: true,
-    car: null, // the car Riko is driving, or null
-    ownedCar: null, // the car Riko owns (parked at the garage)
-    weapon: 'fists', // 'fists' | 'pistol'
+    car: null,
+    health: PLAYER.health,
+    cash: 0,
+    weapon: null, // 'pistol' once bought
     ammo: 0,
-    cash: 100,
+    armor: 0,
+    missionsDone: 0,
+    coins: 0,
+    speed: 0,
     punchCd: 0,
     shootCd: 0,
-    hurtCd: 0,
-    coins: 0,
-    missionsDone: 0,
+    invuln: 0,
   };
 }
 
-// The nearest car Riko can enter (traffic, parked, police, or his own), in range.
-export function nearestEnterableCar(game, rangeDist) {
-  const p = game.player;
+// The nearest car within reach of the player (for E to enter/steal).
+export function nearestCar(game, maxDist = 70) {
   let best = null;
-  let bestD = rangeDist;
-  const cars = [...game.traffic, ...game.parkedCars, ...game.policeCars];
-  if (p.ownedCar) cars.push(p.ownedCar);
-  for (const car of cars) {
-    if (car.hp <= 0) continue;
-    const d = Math.hypot(car.x - p.x, car.y - p.y);
-    if (d < bestD) { bestD = d; best = car; }
+  let bestD = maxDist;
+  for (const car of game.cars) {
+    if (car === game.player.car) continue;
+    const d = Math.hypot(car.x - game.player.x, car.y - game.player.y);
+    if (d < bestD) {
+      best = car;
+      bestD = d;
+    }
   }
   return best;
 }
 
-function tryEnterCar(game) {
+// Get in a car. A parked or traffic car is a steal (wanted +1); the player's
+// own car and the mission car are free. Returns true if it worked.
+export function enterCar(game, car) {
   const p = game.player;
-  const car = nearestEnterableCar(game, 64);
-  if (!car) return;
-  p.car = car;
+  if (!car || !p.onFoot) return false;
+  const stolen = !car.owned && !car.missionCar;
   p.onFoot = false;
+  p.car = car;
+  car.driver = 'player';
+  car.isParked = false;
+  car.isTraffic = false;
   p.x = car.x;
   p.y = car.y;
   p.angle = car.angle;
-  if (car.owner === 'traffic' || car.owner === 'parked') {
-    // Stealing a car is a crime the whole street sees.
-    car.owner = 'player';
-    addWanted(game, 1, 'stole a car');
-    game.banner = { text: 'CAR STOLEN', sub: 'The owner called it in — lose the cops', t: 2.4 };
-  } else if (car.owner === 'police') {
-    car.owner = 'player';
-    addWanted(game, 1, 'stole a police car');
-    game.banner = { text: 'POLICE CAR STOLEN', sub: 'Every unit in Solmar is coming', t: 2.4 };
+  if (stolen) {
+    game.addWanted(1);
+    game.setBanner('Car stolen!', 'The cops are on to you.', 2.5);
   }
-  game.audio.carDoor();
+  return true;
 }
 
-function exitCar(game) {
+export function exitCar(game) {
   const p = game.player;
+  if (p.onFoot || !p.car) return false;
   const car = p.car;
-  if (!car) return;
-  // Step out to the driver's side.
-  const side = { x: car.x + Math.cos(car.angle + Math.PI / 2) * 34, y: car.y + Math.sin(car.angle + Math.PI / 2) * 34 };
-  const fixed = collideBuildings(side.x, side.y, 14, game.world);
-  p.x = fixed.x;
-  p.y = fixed.y;
+  car.driver = null;
+  // Step out beside the car, on the pavement side.
+  const side = { x: car.x + Math.cos(car.angle + Math.PI / 2) * 30, y: car.y + Math.sin(car.angle + Math.PI / 2) * 30 };
+  p.x = side.x;
+  p.y = side.y;
   p.angle = car.angle;
   p.onFoot = true;
   p.car = null;
-  car.speed = 0;
-  game.audio.carDoor();
+  return true;
 }
 
-function punch(game) {
+// Fire the pistol (or punch if unarmed). Creates a bullet the render draws
+// and the police module resolves; returns true if a shot went off.
+export function shoot(game) {
   const p = game.player;
-  if (p.punchCd > 0) return;
-  p.punchCd = 0.45;
-  game.audio.punch();
-  const reach = PLAYER.punchRange;
-  const hx = p.x + Math.cos(p.angle) * reach;
-  const hy = p.y + Math.sin(p.angle) * reach;
-  // Hit pedestrians (a crime), police on foot, or a car door.
+  if (!p.onFoot || p.shootCd > 0) return false;
+  if (p.weapon === 'pistol') {
+    if (p.ammo <= 0) {
+      game.setBanner('Out of ammo', 'Buy more at the Gun Shop.', 2);
+      p.shootCd = 0.35;
+      return false;
+    }
+    p.ammo -= 1;
+    p.shootCd = 0.28;
+    game.bullets.push({
+      x: p.x + Math.cos(p.angle) * 20,
+      y: p.y + Math.sin(p.angle) * 20,
+      angle: p.angle, speed: 900, life: 0.6, from: 'player',
+    });
+    game.lastShotX = p.x;
+    game.lastShotY = p.y;
+    game.lastShotT = 1.2;
+    game.audio.shot();
+    game.shake = Math.max(game.shake, 3);
+    game.addWanted(1);
+    return true;
+  }
+  // Fists: a short punch that hurts the nearest ped or police car bumper.
+  p.shootCd = 0.4;
+  p.punchCd = 0.25;
   for (const ped of game.peds) {
-    if (Math.hypot(ped.x - hx, ped.y - hy) < 34) {
-      ped.flee = 3;
-      ped.fleeX = p.x;
-      ped.fleeY = p.y;
-      addWanted(game, 1, 'assaulted a pedestrian');
-      game.particles.push({ x: ped.x, y: ped.y, vx: 0, vy: -40, life: 0.4, max: 0.4, color: '#f2c94c', size: 5 });
+    if (Math.hypot(ped.x - p.x, ped.y - p.y) < PLAYER.punchRange + 12) {
+      ped.state = 'flee';
+      ped.fleeT = 3;
+      ped.angle = Math.atan2(ped.y - p.y, ped.x - p.x);
     }
   }
-  for (const cop of game.footCops) {
-    if (Math.hypot(cop.x - hx, cop.y - hy) < 34) {
-      cop.hp -= PLAYER.punchDamage;
-      game.particles.push({ x: cop.x, y: cop.y, vx: 0, vy: -40, life: 0.4, max: 0.4, color: '#e5534b', size: 5 });
-    }
-  }
-  for (const car of [...game.traffic, ...game.policeCars]) {
-    if (Math.hypot(car.x - hx, car.y - hy) < 44) {
-      car.hp -= 6;
-      game.audio.thud();
-    }
-  }
+  return true;
 }
 
-function shoot(game) {
-  const p = game.player;
-  if (p.shootCd > 0 || p.ammo <= 0) return;
-  p.shootCd = 0.28;
-  p.ammo -= 1;
-  const bx = p.x + Math.cos(p.angle) * 22;
-  const by = p.y + Math.sin(p.angle) * 22;
-  game.bullets.push({ x: bx, y: by, vx: Math.cos(p.angle) * PLAYER.bulletSpeed, vy: Math.sin(p.angle) * PLAYER.bulletSpeed, dist: 0, from: 'player', damage: PLAYER.pistolDamage });
-  game.audio.gunshot();
-  game.muzzle = 0.06;
-  scarePeds(game, p.x, p.y, 320);
-  // Firing where the police can see it is a crime.
-  if (game.policeCars.some((c) => Math.hypot(c.x - p.x, c.y - p.y) < 520)) {
-    addWanted(game, 1, 'fired a weapon');
-  }
-}
-
-// The shop Riko is standing next to, if any.
-export function nearbyShop(game) {
+// The nearest interactable: a shop, a mission package, a taxi ped, a coin
+// is picked up by walking over it instead.
+export function nearestInteractable(game) {
   const p = game.player;
   if (!p.onFoot) return null;
-  for (const shop of game.world.shops) {
-    if (Math.hypot(shop.x - p.x, shop.y - p.y) < shop.r) return shop;
+  const spots = [
+    { kind: 'garage', x: LANDMARKS.garage.x, y: LANDMARKS.garage.y, name: LANDMARKS.garage.name },
+    { kind: 'gunShop', x: LANDMARKS.gunShop.x, y: LANDMARKS.gunShop.y, name: LANDMARKS.gunShop.name },
+    { kind: 'clinic', x: LANDMARKS.clinic.x, y: LANDMARKS.clinic.y, name: LANDMARKS.clinic.name },
+  ];
+  for (const s of spots) {
+    if (Math.hypot(s.x - p.x, s.y - p.y) < 90) return s;
+  }
+  // Mission packages.
+  if (game.missions.active && game.missions.active.type === 'collect') {
+    for (const pk of game.missions.active.pointsLeft) {
+      if (Math.hypot(pk.x - p.x, pk.y - p.y) < 60) return { kind: 'package', x: pk.x, y: pk.y, name: 'Package' };
+    }
+  }
+  // A taxi ped waiting for a fare.
+  for (const ped of game.peds) {
+    if (ped.taxi && Math.hypot(ped.x - p.x, ped.y - p.y) < 70) {
+      return { kind: 'taxi', x: ped.x, y: ped.y, name: 'Taxi fare', ped };
+    }
   }
   return null;
 }
 
-function buyFromShop(game, shop) {
+// Use the nearest interactable (E). Driving: E gets out of the car.
+export function interact(game) {
   const p = game.player;
-  if (shop.kind === 'guns') {
-    if (p.weapon !== 'pistol' && p.cash >= PRICES.pistol) {
-      p.cash -= PRICES.pistol;
-      p.weapon = 'pistol';
-      p.ammo = PRICES.ammoRounds;
-      game.banner = { text: 'PISTOL BOUGHT', sub: 'Click to shoot — the PD will notice', t: 2 };
-      game.audio.buy();
-    } else if (p.weapon === 'pistol' && p.cash >= PRICES.ammo) {
-      p.cash -= PRICES.ammo;
-      p.ammo += PRICES.ammoRounds;
-      game.banner = { text: 'AMMO BOUGHT', sub: `+${PRICES.ammoRounds} rounds`, t: 1.6 };
-      game.audio.buy();
-    }
-  } else if (shop.kind === 'clinic') {
-    if (p.hp < PLAYER.hp && p.cash >= PRICES.medkit) {
-      p.cash -= PRICES.medkit;
-      p.hp = PLAYER.hp;
-      game.banner = { text: 'PATCHED UP', sub: 'Health restored', t: 1.6 };
-      game.audio.buy();
-    }
-  } else if (shop.kind === 'carshop') {
-    if (!p.ownedCar && p.cash >= PRICES.sportscar) {
-      p.cash -= PRICES.sportscar;
-      const car = makeCar('sport', LANDMARKS.garage.x + 60, LANDMARKS.garage.y + 40, -Math.PI / 2, 'owned');
-      paintCar(car, '#f2c94c');
-      p.ownedCar = car;
-      game.banner = { text: 'SPORTS CAR BOUGHT', sub: 'Parked at TINT & PAINT — press E near it to drive', t: 2.4 };
-      game.audio.buy();
-    }
+  if (!p.onFoot) {
+    exitCar(game);
+    return 'exit';
   }
+  const it = nearestInteractable(game);
+  if (!it) {
+    // No shop nearby: try to get in a car instead.
+    const car = nearestCar(game);
+    if (car) enterCar(game, car);
+    return null;
+  }
+  if (it.kind === 'garage') {
+    if (game.wanted > 0) {
+      const cost = Math.min(PLAYER.repaintPrice, p.cash);
+      p.cash -= cost;
+      game.setWanted(0);
+      game.setBanner('TINT & PAINT', `Fresh paint, clean slate. -$${cost}`, 2.5);
+      game.audio.pickup();
+      return 'repainted';
+    }
+    if (!p.ownedCar && p.cash >= PLAYER.ownedCarPrice) {
+      p.cash -= PLAYER.ownedCarPrice;
+      p.ownedCar = true;
+      const spot = { x: LANDMARKS.garage.x + 60, y: LANDMARKS.garage.y + 40 };
+      const car = game.spawnCar('sport', spot.x, spot.y, 0, '#f2c94c');
+      car.owned = true;
+      game.setBanner('Your car is ready', 'A sports car, parked at the garage.', 3);
+      game.audio.pickup();
+      return 'bought-car';
+    }
+    game.setBanner('TINT & PAINT', game.wanted > 0 ? 'Repaint clears your wanted level.' : 'No heat on you. A sports car costs $500.', 2.5);
+    return 'garage';
+  }
+  if (it.kind === 'gunShop') {
+    if (!p.weapon && p.cash >= PLAYER.pistolPrice) {
+      p.cash -= PLAYER.pistolPrice;
+      p.weapon = 'pistol';
+      p.ammo = PLAYER.ammoPack;
+      game.setBanner('Pistol bought', `${PLAYER.ammoPack} rounds included.`, 2.5);
+      game.audio.pickup();
+      return 'bought-gun';
+    }
+    if (p.weapon && p.cash >= PLAYER.ammoPrice) {
+      p.cash -= PLAYER.ammoPrice;
+      p.ammo += PLAYER.ammoPack;
+      game.setBanner('Ammo bought', `+${PLAYER.ammoPack} rounds.`, 2);
+      game.audio.pickup();
+      return 'bought-ammo';
+    }
+    game.setBanner('Gun Shop', p.weapon ? `Ammo is $${PLAYER.ammoPrice}.` : `A pistol is $${PLAYER.pistolPrice}.`, 2.5);
+    return 'gunshop';
+  }
+  if (it.kind === 'clinic') {
+    if (p.health < PLAYER.health && p.cash >= PLAYER.healPrice) {
+      p.cash -= PLAYER.healPrice;
+      p.health = PLAYER.health;
+      game.setBanner('Patched up', 'Full health.', 2);
+      game.audio.pickup();
+      return 'healed';
+    }
+    game.setBanner('Clinic', p.health >= PLAYER.health ? 'You are already healthy.' : `A full heal is $${PLAYER.healPrice}.`, 2.5);
+    return 'clinic';
+  }
+  if (it.kind === 'package') {
+    game.collectPackage();
+    return 'package';
+  }
+  if (it.kind === 'taxi') {
+    game.startFare(it.ped);
+    return 'fare';
+  }
+  return null;
 }
 
+// Per-tick player update: on foot or driving, plus pickups and timers.
 export function updatePlayer(game, dt) {
   const p = game.player;
   const input = game.input;
-  p.punchCd = Math.max(0, p.punchCd - dt);
-  p.shootCd = Math.max(0, p.shootCd - dt);
-  p.hurtCd = Math.max(0, p.hurtCd - dt);
-  if (p.onFoot) {
-    // Aim at the mouse; WASD moves in screen space.
-    const worldMouse = game.screenToWorld(input.mouseX, input.mouseY);
-    p.angle = Math.atan2(worldMouse.y - p.y, worldMouse.x - p.x);
-    let mx = 0;
-    let my = 0;
-    if (input.keys.has('KeyW') || input.keys.has('ArrowUp')) my -= 1;
-    if (input.keys.has('KeyS') || input.keys.has('ArrowDown')) my += 1;
-    if (input.keys.has('KeyA') || input.keys.has('ArrowLeft')) mx -= 1;
-    if (input.keys.has('KeyD') || input.keys.has('ArrowRight')) mx += 1;
-    const len = Math.hypot(mx, my);
-    if (len > 0) {
-      p.x += (mx / len) * PLAYER.walkSpeed * dt;
-      p.y += (my / len) * PLAYER.walkSpeed * dt;
-    }
-    const fixed = collideBuildings(p.x, p.y, PLAYER.radius, game.world);
-    p.x = fixed.x;
-    p.y = fixed.y;
-    if (isInWater(p.x, p.y)) {
-      p.x = Math.max(150, p.x);
-      p.y = Math.min(3560, p.y);
-    }
-    if (input.mouseDown) {
-      if (p.weapon === 'pistol' && p.ammo > 0) shoot(game);
-      else punch(game);
-    }
-    if (input.pressed('KeyE')) {
-      const shop = nearbyShop(game);
-      if (shop) buyFromShop(game, shop);
-      else tryEnterCar(game);
-    }
-    // Sun coins, on foot or in a car, are collected by touch.
-    for (const coin of game.world.coins) {
-      if (!coin.taken && Math.hypot(coin.x - p.x, coin.y - p.y) < 30) {
-        coin.taken = true;
-        p.coins += 1;
-        p.cash += PRICES.coin;
-        game.audio.coin();
-        game.particles.push({ x: coin.x, y: coin.y, vx: 0, vy: -60, life: 0.6, max: 0.6, color: '#f2c94c', size: 7 });
-      }
-    }
-  } else {
-    // Driving: W/S throttle, A/D steer, Space handbrake, E to step out.
+  if (p.invuln > 0) p.invuln -= dt;
+  if (p.shootCd > 0) p.shootCd -= dt;
+  if (p.punchCd > 0) p.punchCd -= dt;
+
+  if (!p.onFoot && p.car) {
+    // Driving.
+    const throttle = (input.up ? 1 : 0) + (input.down ? -1 : 0);
+    const steer = (input.left ? -1 : 0) + (input.right ? 1 : 0);
     const car = p.car;
-    const throttle = (input.keys.has('KeyW') || input.keys.has('ArrowUp') ? 1 : 0) - (input.keys.has('KeyS') || input.keys.has('ArrowDown') ? 0.85 : 0);
-    const steer = (input.keys.has('KeyA') || input.keys.has('ArrowLeft') ? -1 : 0) + (input.keys.has('KeyD') || input.keys.has('ArrowRight') ? 1 : 0);
-    const brake = input.keys.has('Space');
-    const hit = driveCar(car, { throttle, steer, brake }, dt, game.world);
-    if (hit && Math.abs(car.speed) > 200) game.audio.thud();
+    // Handbrake: sharp slow + tighter turn.
+    if (input.handbrake) {
+      car.speed *= Math.max(0, 1 - 2.2 * dt);
+    }
+    driveCar(car, throttle, steer, dt);
     p.x = car.x;
     p.y = car.y;
     p.angle = car.angle;
-    if (car.skid > 0.4 && Math.abs(car.speed) > 200) {
-      game.particles.push({ x: car.x - Math.cos(car.angle) * 24, y: car.y - Math.sin(car.angle) * 24, vx: 0, vy: 0, life: 0.5, max: 0.5, color: '#c9c4b2', size: 6 });
-    }
-    if (input.pressed('KeyE')) exitCar(game);
-    // Coins while driving.
-    for (const coin of game.world.coins) {
-      if (!coin.taken && Math.hypot(coin.x - car.x, coin.y - car.y) < 34) {
-        coin.taken = true;
-        p.coins += 1;
-        p.cash += PRICES.coin;
-        game.audio.coin();
-      }
-    }
-    // Stunt ramps: speed over a ramp launches the car.
+    p.speed = car.speed;
+    // Ramps: a fast car over a ramp goes airborne and earns a stunt bonus.
     for (const ramp of game.world.ramps) {
-      if (car.airborne <= 0 && Math.abs(car.speed) > 300 && Math.hypot(ramp.x - car.x, ramp.y - car.y) < 46) {
-        car.airborne = 0.9;
-        p.cash += PRICES.stunt;
-        game.slowmo = 0.9;
-        game.banner = { text: 'STUNT JUMP!', sub: `+$${PRICES.stunt} — clean air`, t: 1.8 };
-        game.audio.stunt();
+      if (Math.abs(car.speed) > 260 && Math.hypot(car.x - ramp.x, car.y - ramp.y) < 40 && car.airborne <= 0) {
+        car.airborne = 0.7;
+        p.cash += 20;
+        game.setBanner('STUNT!', '+$20', 1.5);
+        game.audio.pickup();
       }
     }
     if (car.airborne > 0) car.airborne -= dt;
-    // Hitting a pedestrian while driving is a crime.
-    for (const ped of game.peds) {
-      if (ped.hitCd > 0) continue;
-      if (Math.hypot(ped.x - car.x, ped.y - car.y) < 34 && Math.abs(car.speed) > 60) {
-        ped.hitCd = 2;
-        ped.flee = 3;
-        ped.fleeX = car.x;
-        ped.fleeY = car.y;
-        addWanted(game, 1, 'hit a pedestrian');
-        game.audio.thud();
-        game.shake = 0.25;
-      }
-    }
-    // The player's car can be wrecked: bail out on foot.
-    if (car.hp <= 0) {
-      game.banner = { text: 'CAR WRECKED', sub: 'Riko bails out on foot', t: 2 };
-      exitCar(game);
+    return;
+  }
+
+  // On foot: WASD moves, mouse aims.
+  let mx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+  let my = (input.down ? 1 : 0) - (input.up ? 1 : 0);
+  const len = Math.hypot(mx, my);
+  if (len > 0) {
+    mx /= len;
+    my /= len;
+    const speed = input.run ? PLAYER.runSpeed : PLAYER.walkSpeed;
+    const nx = p.x + mx * speed * dt;
+    const ny = p.y + my * speed * dt;
+    // Buildings and the sea block movement (checked axis by axis so the
+    // player slides along a wall instead of sticking to it).
+    if (!isBlocked(game.world, nx, p.y, PLAYER.radius)) p.x = nx;
+    if (!isBlocked(game.world, p.x, ny, PLAYER.radius)) p.y = ny;
+    p.speed = speed;
+  } else {
+    p.speed = 0;
+  }
+  // Aim at the mouse (screen → world).
+  const wx = game.camera.x + input.mouseX - game.viewW / 2;
+  const wy = game.camera.y + input.mouseY - game.viewH / 2;
+  if (Math.hypot(wx - p.x, wy - p.y) > 8) {
+    p.angle = Math.atan2(wy - p.y, wx - p.x);
+  }
+  if (input.shoot) shoot(game);
+
+  // Sun coins: walk over one to collect it.
+  for (const coin of game.world.coins) {
+    if (!coin.taken && Math.hypot(coin.x - p.x, coin.y - p.y) < 30) {
+      coin.taken = true;
+      p.coins += 1;
+      p.cash += COIN_VALUE;
+      game.setBanner('Sun coin!', `+$${COIN_VALUE} (${p.coins}/20)`, 1.5);
+      game.audio.pickup();
     }
   }
-  for (const ped of game.peds) ped.hitCd = Math.max(0, (ped.hitCd || 0) - dt);
 }
